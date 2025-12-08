@@ -308,7 +308,6 @@ const DonationStatsChart = ({
   );
 };
 
-// Install required package:
-// npm install recharts
+
 
 export default DonationStatsChart;

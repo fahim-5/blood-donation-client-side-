@@ -1,13 +1,15 @@
-import { createContext, useState, useContext, useEffect } from 'react';
+// client/src/context/AuthContext.jsx
+import { createContext, useContext, useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { authService } from '../services/authService';
-import { jwtDecode } from 'jwt-decode';
+import { toast } from 'react-hot-toast';
 
 const AuthContext = createContext();
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
+    throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
 };
@@ -15,226 +17,234 @@ export const useAuth = () => {
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [token, setToken] = useState(localStorage.getItem('token'));
+  const navigate = useNavigate();
+  const location = useLocation();
 
-  // Check if token is expired
-  const isTokenExpired = (token) => {
-    if (!token) return true;
-    try {
-      const decoded = jwtDecode(token);
-      return decoded.exp * 1000 < Date.now();
-    } catch {
-      return true;
-    }
-  };
-
-  // Get user from token
-  const getUserFromToken = (token) => {
-    try {
-      const decoded = jwtDecode(token);
-      return {
-        _id: decoded._id,
-        email: decoded.email,
-        name: decoded.name,
-        avatar: decoded.avatar,
-        bloodGroup: decoded.bloodGroup,
-        district: decoded.district,
-        upazila: decoded.upazila,
-        role: decoded.role || 'donor',
-        status: decoded.status || 'active'
-      };
-    } catch (error) {
-      console.error('Error decoding token:', error);
-      return null;
-    }
-  };
-
-  // Initialize auth state
+  // Check authentication on mount and token change
   useEffect(() => {
-    const initializeAuth = async () => {
+    const checkAuth = async () => {
       try {
-        const token = localStorage.getItem('bloodToken');
-        
-        if (token && !isTokenExpired(token)) {
-          const userData = getUserFromToken(token);
-          if (userData) {
-            setUser(userData);
-            
-            // Verify token with server
-            try {
-              await authService.verifyToken();
-            } catch (error) {
-              console.log('Token verification failed, logging out...');
-              logout();
-            }
+        if (token) {
+          const userData = await authService.getCurrentUser();
+          setUser(userData);
+          
+          // Redirect blocked users
+          if (userData?.status === 'blocked') {
+            toast.error('Your account has been blocked. Please contact support.');
+            logout();
+            navigate('/blocked');
           }
-        } else if (token) {
-          // Token expired, clear it
-          localStorage.removeItem('bloodToken');
         }
       } catch (error) {
-        console.error('Auth initialization error:', error);
+        console.error('Auth check failed:', error);
+        // Clear invalid token
+        if (error.response?.status === 401) {
+          localStorage.removeItem('token');
+          setToken(null);
+          setUser(null);
+        }
       } finally {
         setLoading(false);
       }
     };
 
-    initializeAuth();
-  }, []);
+    checkAuth();
+  }, [token, navigate]);
 
-  // Login function
+  // Auto-logout on token expiration
+  useEffect(() => {
+    const checkTokenExpiration = () => {
+      if (token) {
+        const tokenData = JSON.parse(atob(token.split('.')[1]));
+        const expiresAt = tokenData.exp * 1000;
+        
+        if (Date.now() >= expiresAt) {
+          toast.error('Your session has expired. Please login again.');
+          logout();
+        }
+      }
+    };
+
+    // Check every minute
+    const interval = setInterval(checkTokenExpiration, 60000);
+    return () => clearInterval(interval);
+  }, [token]);
+
+  // Redirect to intended route after login
+  useEffect(() => {
+    if (!loading && user) {
+      const intendedPath = localStorage.getItem('intendedPath');
+      if (intendedPath) {
+        localStorage.removeItem('intendedPath');
+        navigate(intendedPath);
+      }
+    }
+  }, [user, loading, navigate]);
+
   const login = async (email, password) => {
     try {
       setLoading(true);
-      setError(null);
+      const response = await authService.login(email, password);
       
-      const response = await authService.login({ email, password });
+      const { user: userData, token: authToken } = response;
       
-      if (response.data.success) {
-        const { token, user: userData } = response.data;
-        
-        // Store token
-        localStorage.setItem('bloodToken', token);
-        
-        // Set user state
-        setUser({
-          _id: userData._id,
-          email: userData.email,
-          name: userData.name,
-          avatar: userData.avatar,
-          bloodGroup: userData.bloodGroup,
-          district: userData.district,
-          upazila: userData.upazila,
-          role: userData.role,
-          status: userData.status
-        });
-        
-        return { success: true, data: userData };
+      // Store token
+      localStorage.setItem('token', authToken);
+      setToken(authToken);
+      setUser(userData);
+      
+      // Check if user is blocked
+      if (userData.status === 'blocked') {
+        toast.error('Your account has been blocked. Please contact support.');
+        logout();
+        return { success: false, error: 'Account blocked' };
       }
+      
+      toast.success(`Welcome back, ${userData.name}!`);
+      
+      return { success: true, user: userData };
     } catch (error) {
-      const errorMessage = error.response?.data?.message || 'Login failed. Please try again.';
-      setError(errorMessage);
+      console.error('Login failed:', error);
+      const errorMessage = error.response?.data?.message || 'Login failed. Please check your credentials.';
+      toast.error(errorMessage);
       return { success: false, error: errorMessage };
     } finally {
       setLoading(false);
     }
   };
 
-  // Register function
   const register = async (userData) => {
     try {
       setLoading(true);
-      setError(null);
-      
       const response = await authService.register(userData);
       
-      if (response.data.success) {
-        const { token, user: newUser } = response.data;
-        
-        // Store token
-        localStorage.setItem('bloodToken', token);
-        
-        // Set user state
-        setUser({
-          _id: newUser._id,
-          email: newUser.email,
-          name: newUser.name,
-          avatar: newUser.avatar,
-          bloodGroup: newUser.bloodGroup,
-          district: newUser.district,
-          upazila: newUser.upazila,
-          role: newUser.role,
-          status: newUser.status
-        });
-        
-        return { success: true, data: newUser };
-      }
+      const { user: newUser, token: authToken } = response;
+      
+      // Store token
+      localStorage.setItem('token', authToken);
+      setToken(authToken);
+      setUser(newUser);
+      
+      toast.success('Registration successful! Welcome to BloodDonation.');
+      
+      return { success: true, user: newUser };
     } catch (error) {
+      console.error('Registration failed:', error);
       const errorMessage = error.response?.data?.message || 'Registration failed. Please try again.';
-      setError(errorMessage);
+      toast.error(errorMessage);
       return { success: false, error: errorMessage };
     } finally {
       setLoading(false);
     }
   };
 
-  // Logout function
   const logout = () => {
-    localStorage.removeItem('bloodToken');
+    localStorage.removeItem('token');
+    setToken(null);
     setUser(null);
-    setError(null);
+    
+    // Clear any stored state
+    localStorage.removeItem('intendedPath');
+    
+    toast.success('Logged out successfully');
+    navigate('/login');
   };
 
-  // Update user profile
-  const updateProfile = async (updatedData) => {
+  const updateUser = (updatedData) => {
+    setUser(prev => ({ ...prev, ...updatedData }));
+  };
+
+  const refreshToken = async () => {
     try {
-      setLoading(true);
+      const response = await authService.refreshToken();
+      const { token: newToken, user: userData } = response;
       
-      const response = await authService.updateProfile(updatedData);
+      localStorage.setItem('token', newToken);
+      setToken(newToken);
+      setUser(userData);
       
-      if (response.data.success) {
-        const updatedUser = response.data.user;
-        
-        // Update user state
-        setUser(prev => ({
-          ...prev,
-          ...updatedUser
-        }));
-        
-        // Update token if new one provided
-        if (response.data.token) {
-          localStorage.setItem('bloodToken', response.data.token);
-        }
-        
-        return { success: true, data: updatedUser };
-      }
+      return { success: true, token: newToken };
     } catch (error) {
-      const errorMessage = error.response?.data?.message || 'Profile update failed.';
-      setError(errorMessage);
-      return { success: false, error: errorMessage };
-    } finally {
-      setLoading(false);
+      console.error('Token refresh failed:', error);
+      logout();
+      return { success: false, error: error.message };
     }
   };
 
-  // Check if user is admin
-  const isAdmin = () => {
-    return user?.role === 'admin';
+  const isAuthenticated = () => {
+    return !!user && !!token;
   };
 
-  // Check if user is volunteer
-  const isVolunteer = () => {
-    return user?.role === 'volunteer';
+  const hasRole = (requiredRole) => {
+    if (!user) return false;
+    
+    // Admin has access to everything
+    if (user.role === 'admin') return true;
+    
+    // Check specific role
+    return user.role === requiredRole;
   };
 
-  // Check if user is donor
-  const isDonor = () => {
-    return user?.role === 'donor';
+  const hasAnyRole = (roles) => {
+    if (!user) return false;
+    
+    if (user.role === 'admin') return true;
+    
+    return roles.includes(user.role);
   };
 
-  // Check if user is active (not blocked)
-  const isActive = () => {
-    return user?.status === 'active';
+  const requireAuth = (requiredRole = null) => {
+    return (to, from, next) => {
+      if (!isAuthenticated()) {
+        // Store intended path
+        localStorage.setItem('intendedPath', to.path);
+        toast.error('Please login to access this page');
+        navigate('/login');
+        return false;
+      }
+
+      if (requiredRole && !hasRole(requiredRole)) {
+        toast.error('You do not have permission to access this page');
+        navigate('/unauthorized');
+        return false;
+      }
+
+      return true;
+    };
   };
 
-  // Clear error
-  const clearError = () => {
-    setError(null);
+  const getAuthHeaders = () => {
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
   };
 
   const value = {
     user,
+    token,
     loading,
-    error,
+    isAuthenticated: isAuthenticated(),
+    isAdmin: user?.role === 'admin',
+    isDonor: user?.role === 'donor',
+    isVolunteer: user?.role === 'volunteer',
+    isBlocked: user?.status === 'blocked',
+    
+    // Actions
     login,
     register,
     logout,
-    updateProfile,
-    isAdmin,
-    isVolunteer,
-    isDonor,
-    isActive,
-    clearError
+    updateUser,
+    refreshToken,
+    
+    // Role checks
+    hasRole,
+    hasAnyRole,
+    
+    // Utilities
+    requireAuth,
+    getAuthHeaders,
   };
 
   return (
@@ -244,5 +254,48 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
-export default AuthContext;
+// Protected Route Component
+export const ProtectedRoute = ({ children, roles = [] }) => {
+  const { isAuthenticated, hasAnyRole, loading } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
+  useEffect(() => {
+    if (!loading) {
+      if (!isAuthenticated) {
+        // Store intended path
+        localStorage.setItem('intendedPath', location.pathname + location.search);
+        navigate('/login');
+      } else if (roles.length > 0 && !hasAnyRole(roles)) {
+        navigate('/unauthorized');
+      }
+    }
+  }, [isAuthenticated, hasAnyRole, loading, navigate, location, roles]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated || (roles.length > 0 && !hasAnyRole(roles))) {
+    return null;
+  }
+
+  return children;
+};
+
+// Role-based route components
+export const AdminRoute = ({ children }) => (
+  <ProtectedRoute roles={['admin']}>{children}</ProtectedRoute>
+);
+
+export const DonorRoute = ({ children }) => (
+  <ProtectedRoute roles={['donor', 'admin']}>{children}</ProtectedRoute>
+);
+
+export const VolunteerRoute = ({ children }) => (
+  <ProtectedRoute roles={['volunteer', 'admin']}>{children}</ProtectedRoute>
+);
