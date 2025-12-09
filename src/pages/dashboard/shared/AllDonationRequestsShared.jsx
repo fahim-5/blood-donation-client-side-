@@ -1,27 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FaTint, FaFilter, FaSearch, FaClock, FaExclamationTriangle, FaCheckCircle, FaTimesCircle, FaEye, FaHeartbeat, FaDownload } from 'react-icons/fa';
+import { FaTint, FaFilter, FaSearch, FaClock, FaExclamationTriangle, FaCheckCircle, FaTimesCircle, FaEye, FaHeartbeat } from 'react-icons/fa';
 import { motion } from 'framer-motion';
 import DashboardHeader from '../../../components/ui/DashboardHeader';
 import LoadingSpinner from '../../../components/common/LoadingSpinner';
 import DonationRequestCard from '../../../components/common/DonationRequestCard';
 import useAuth from '../../../hooks/useAuth';
 import useDonations from '../../../hooks/useDonations';
-import { exportToPDF } from '../../../utils/pdfGenerator';
 
 const AllDonationRequestsShared = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { getAllDonationRequests, loading } = useDonations();
+  const { getAllPublicDonationRequests, loading } = useDonations();
   
   const [donationRequests, setDonationRequests] = useState([]);
   const [filteredRequests, setFilteredRequests] = useState([]);
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('pending');
   const [bloodGroupFilter, setBloodGroupFilter] = useState('all');
+  const [districtFilter, setDistrictFilter] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [viewType, setViewType] = useState('grid');
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(9);
-  const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'list'
+  const [itemsPerPage] = useState(12);
 
   const fadeInUp = {
     hidden: { opacity: 0, y: 20 },
@@ -44,11 +44,11 @@ const AllDonationRequestsShared = () => {
 
   useEffect(() => {
     filterAndSearchRequests();
-  }, [donationRequests, statusFilter, bloodGroupFilter, searchTerm]);
+  }, [donationRequests, statusFilter, bloodGroupFilter, districtFilter, searchTerm]);
 
   const fetchDonationRequests = async () => {
     try {
-      const requests = await getAllDonationRequests();
+      const requests = await getAllPublicDonationRequests();
       setDonationRequests(requests);
       setFilteredRequests(requests);
     } catch (error) {
@@ -69,15 +69,20 @@ const AllDonationRequestsShared = () => {
       filtered = filtered.filter(request => request.bloodGroup === bloodGroupFilter);
     }
 
+    // Apply district filter
+    if (districtFilter) {
+      filtered = filtered.filter(request => 
+        request.recipientDistrict?.toLowerCase().includes(districtFilter.toLowerCase())
+      );
+    }
+
     // Apply search filter
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       filtered = filtered.filter(request => 
         request.recipientName.toLowerCase().includes(term) ||
         request.hospitalName.toLowerCase().includes(term) ||
-        request.recipientDistrict.toLowerCase().includes(term) ||
-        request.recipientUpazila.toLowerCase().includes(term) ||
-        request.requesterName?.toLowerCase().includes(term)
+        request.recipientUpazila?.toLowerCase().includes(term)
       );
     }
 
@@ -89,29 +94,12 @@ const AllDonationRequestsShared = () => {
     navigate(`/dashboard/requests/${requestId}`);
   };
 
-  const handleDonate = (requestId) => {
-    navigate(`/dashboard/requests/${requestId}`, { state: { donate: true } });
+  const handleCreateRequest = () => {
+    navigate('/dashboard/create-donation-request');
   };
 
-  const handleExportPDF = () => {
-    if (filteredRequests.length === 0) {
-      alert('No requests to export');
-      return;
-    }
-    
-    const data = {
-      title: 'All Donation Requests Report',
-      filters: { 
-        status: statusFilter, 
-        bloodGroup: bloodGroupFilter,
-        search: searchTerm 
-      },
-      requests: filteredRequests,
-      user: user?.name,
-      exportDate: new Date().toLocaleDateString()
-    };
-    
-    exportToPDF(data, 'all-donation-requests-shared');
+  const handleDonate = (requestId) => {
+    navigate(`/dashboard/requests/${requestId}?tab=donors`);
   };
 
   const getStatusColor = (status) => {
@@ -134,6 +122,9 @@ const AllDonationRequestsShared = () => {
     }
   };
 
+  // Get unique districts for filter
+  const uniqueDistricts = [...new Set(donationRequests.map(req => req.recipientDistrict).filter(Boolean))].sort();
+
   // Pagination calculations
   const indexOfLastItem = currentPage * itemsPerPage;
   const indexOfFirstItem = indexOfLastItem - itemsPerPage;
@@ -149,8 +140,14 @@ const AllDonationRequestsShared = () => {
     total: donationRequests.length,
     pending: donationRequests.filter(r => r.status === 'pending').length,
     inprogress: donationRequests.filter(r => r.status === 'inprogress').length,
-    done: donationRequests.filter(r => r.status === 'done').length,
-    canceled: donationRequests.filter(r => r.status === 'canceled').length
+    urgent: donationRequests.filter(r => {
+      if (r.status !== 'pending') return false;
+      const requestDate = new Date(r.donationDate);
+      const today = new Date();
+      const diffTime = requestDate - today;
+      const diffDays = diffTime / (1000 * 60 * 60 * 24);
+      return diffDays <= 1; // Urgent if within 24 hours
+    }).length
   };
 
   return (
@@ -168,27 +165,58 @@ const AllDonationRequestsShared = () => {
         initial="hidden"
         animate="visible"
         variants={fadeInUp}
-        className="grid grid-cols-2 md:grid-cols-5 gap-4"
+        className="grid grid-cols-2 md:grid-cols-4 gap-4"
       >
         <div className="bg-white border border-gray-200 rounded-lg p-4">
           <div className="text-2xl font-bold text-gray-900">{stats.total}</div>
-          <div className="text-sm text-gray-600">Total</div>
+          <div className="text-sm text-gray-600">Total Requests</div>
         </div>
         <div className="bg-white border border-yellow-200 rounded-lg p-4">
           <div className="text-2xl font-bold text-yellow-600">{stats.pending}</div>
-          <div className="text-sm text-gray-600">Pending</div>
+          <div className="text-sm text-gray-600">Awaiting Donors</div>
         </div>
         <div className="bg-white border border-blue-200 rounded-lg p-4">
           <div className="text-2xl font-bold text-blue-600">{stats.inprogress}</div>
           <div className="text-sm text-gray-600">In Progress</div>
         </div>
-        <div className="bg-white border border-green-200 rounded-lg p-4">
-          <div className="text-2xl font-bold text-green-600">{stats.done}</div>
-          <div className="text-sm text-gray-600">Done</div>
-        </div>
         <div className="bg-white border border-red-200 rounded-lg p-4">
-          <div className="text-2xl font-bold text-red-600">{stats.canceled}</div>
-          <div className="text-sm text-gray-600">Canceled</div>
+          <div className="text-2xl font-bold text-red-600">{stats.urgent}</div>
+          <div className="text-sm text-gray-600">Urgent (24h)</div>
+        </div>
+      </motion.div>
+
+      {/* Call to Action */}
+      <motion.div
+        initial="hidden"
+        animate="visible"
+        variants={fadeInUp}
+        transition={{ delay: 0.1 }}
+        className="bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl p-6"
+      >
+        <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+          <div>
+            <h3 className="text-xl font-bold mb-2">Ready to Save a Life?</h3>
+            <p className="text-red-100">
+              Browse donation requests below. If you find a match for your blood type, 
+              you can respond and potentially save a life today.
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              onClick={() => navigate('/search-donors')}
+              className="bg-white text-red-600 hover:bg-gray-100 px-6 py-3 rounded-lg font-semibold transition-colors"
+            >
+              Search Donors
+            </button>
+            {user?.role === 'donor' && (
+              <button
+                onClick={handleCreateRequest}
+                className="bg-transparent border-2 border-white text-white hover:bg-white/10 px-6 py-3 rounded-lg font-semibold transition-colors"
+              >
+                Create Request
+              </button>
+            )}
+          </div>
         </div>
       </motion.div>
 
@@ -197,7 +225,7 @@ const AllDonationRequestsShared = () => {
         initial="hidden"
         animate="visible"
         variants={fadeInUp}
-        transition={{ delay: 0.1 }}
+        transition={{ delay: 0.2 }}
         className="bg-white rounded-xl shadow-sm border border-gray-200 p-6"
       >
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
@@ -210,36 +238,29 @@ const AllDonationRequestsShared = () => {
             </p>
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex items-center gap-3">
             <div className="flex border border-gray-300 rounded-lg overflow-hidden">
               <button
-                onClick={() => setViewMode('grid')}
-                className={`px-4 py-2 ${viewMode === 'grid' ? 'bg-gray-800 text-white' : 'bg-gray-50 text-gray-700 hover:bg-gray-100'}`}
+                onClick={() => setViewType('grid')}
+                className={`px-4 py-2 ${viewType === 'grid' ? 'bg-gray-100 text-gray-900' : 'text-gray-600 hover:bg-gray-50'}`}
               >
                 Grid
               </button>
               <button
-                onClick={() => setViewMode('list')}
-                className={`px-4 py-2 ${viewMode === 'list' ? 'bg-gray-800 text-white' : 'bg-gray-50 text-gray-700 hover:bg-gray-100'}`}
+                onClick={() => setViewType('list')}
+                className={`px-4 py-2 ${viewType === 'list' ? 'bg-gray-100 text-gray-900' : 'text-gray-600 hover:bg-gray-50'}`}
               >
                 List
               </button>
             </div>
-            
-            <button
-              onClick={handleExportPDF}
-              className="inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-            >
-              <FaDownload /> Export
-            </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {/* Search Input */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Search Requests
+              Search
             </label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -249,7 +270,7 @@ const AllDonationRequestsShared = () => {
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search by recipient, hospital, location..."
+                placeholder="Search by recipient, hospital..."
                 className="pl-10 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
               />
             </div>
@@ -294,12 +315,80 @@ const AllDonationRequestsShared = () => {
               >
                 {bloodGroups.map(group => (
                   <option key={group} value={group}>
-                    {group === 'all' ? 'All Blood Groups' : group}
+                    {group === 'all' ? 'All Groups' : group}
                   </option>
                 ))}
               </select>
             </div>
           </div>
+
+          {/* District Filter */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              District
+            </label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <FaFilter className="text-gray-400" />
+              </div>
+              <select
+                value={districtFilter}
+                onChange={(e) => setDistrictFilter(e.target.value)}
+                className="pl-10 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
+              >
+                <option value="">All Districts</option>
+                {uniqueDistricts.map(district => (
+                  <option key={district} value={district}>
+                    {district}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Filters */}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            onClick={() => {
+              setStatusFilter('pending');
+              setBloodGroupFilter(user?.bloodGroup || 'all');
+            }}
+            className="px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm hover:bg-red-200 transition-colors"
+          >
+            My Blood Type ({user?.bloodGroup || 'Any'})
+          </button>
+          <button
+            onClick={() => {
+              setStatusFilter('pending');
+              setDistrictFilter(user?.district || '');
+            }}
+            className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm hover:bg-blue-200 transition-colors"
+          >
+            My District ({user?.district || 'Any'})
+          </button>
+          <button
+            onClick={() => {
+              setStatusFilter('pending');
+              setBloodGroupFilter('all');
+              setDistrictFilter('');
+              setSearchTerm('');
+            }}
+            className="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm hover:bg-gray-200 transition-colors"
+          >
+            Show All Pending
+          </button>
+          <button
+            onClick={() => {
+              setStatusFilter('all');
+              setBloodGroupFilter('all');
+              setDistrictFilter('');
+              setSearchTerm('');
+            }}
+            className="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm hover:bg-gray-200 transition-colors"
+          >
+            Clear All Filters
+          </button>
         </div>
       </motion.div>
 
@@ -308,16 +397,16 @@ const AllDonationRequestsShared = () => {
         initial="hidden"
         animate="visible"
         variants={fadeInUp}
-        transition={{ delay: 0.2 }}
+        transition={{ delay: 0.3 }}
       >
         {loading && donationRequests.length === 0 ? (
-          <div className="p-12 text-center bg-white rounded-xl border border-gray-200">
+          <div className="p-12 text-center">
             <LoadingSpinner size="large" />
             <p className="text-gray-500 mt-4">Loading donation requests...</p>
           </div>
         ) : filteredRequests.length > 0 ? (
           <>
-            {viewMode === 'grid' ? (
+            {viewType === 'grid' ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {currentItems.map((request) => (
                   <DonationRequestCard
@@ -325,100 +414,76 @@ const AllDonationRequestsShared = () => {
                     request={request}
                     onViewDetails={() => handleViewDetails(request._id)}
                     onDonate={() => handleDonate(request._id)}
-                    showDonateButton={user?.bloodGroup === request.bloodGroup && request.status === 'pending'}
-                    currentUser={user}
+                    showDonateButton={user?.role === 'donor' && request.status === 'pending'}
                   />
                 ))}
               </div>
             ) : (
-              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Recipient
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Location & Hospital
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Date & Time
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Blood Group
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Status
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {currentItems.map((request) => (
-                        <tr key={request._id} className="hover:bg-gray-50">
-                          <td className="px-6 py-4">
-                            <div className="font-medium text-gray-900">{request.recipientName}</div>
-                            <div className="text-sm text-gray-500">By: {request.requesterName}</div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="text-sm text-gray-900">
-                              {request.recipientDistrict}, {request.recipientUpazila}
-                            </div>
-                            <div className="text-sm text-gray-500">{request.hospitalName}</div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm text-gray-900">
-                              {new Date(request.donationDate).toLocaleDateString()}
-                            </div>
-                            <div className="text-sm text-gray-500">{request.donationTime}</div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className="px-3 py-1 inline-flex text-sm leading-5 font-semibold rounded-full bg-red-100 text-red-800">
-                              {request.bloodGroup}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${getStatusColor(request.status)}`}>
-                                {getStatusIcon(request.status)}
-                              </div>
-                              <span className="capitalize">{request.status}</span>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => handleViewDetails(request._id)}
-                                className="text-blue-600 hover:text-blue-900 p-1"
-                                title="View Details"
-                              >
-                                <FaEye />
-                              </button>
-                              {user?.bloodGroup === request.bloodGroup && request.status === 'pending' && (
-                                <button
-                                  onClick={() => handleDonate(request._id)}
-                                  className="text-red-600 hover:text-red-900 p-1"
-                                  title="Donate Blood"
-                                >
-                                  <FaHeartbeat />
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+              <div className="space-y-4">
+                {currentItems.map((request) => (
+                  <div
+                    key={request._id}
+                    className="bg-white border border-gray-200 rounded-xl p-6 hover:shadow-md transition-shadow"
+                  >
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      {/* Request Info */}
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center ${getStatusColor(request.status)}`}>
+                            {getStatusIcon(request.status)}
+                          </div>
+                          <div>
+                            <h4 className="font-semibold text-gray-900">{request.recipientName}</h4>
+                            <div className="text-sm text-gray-600">{request.hospitalName}</div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-4 text-sm">
+                          <div className="flex items-center gap-2">
+                            <FaTint className="text-red-400" />
+                            <span className="font-medium text-red-600">{request.bloodGroup}</span>
+                          </div>
+                          <div className="text-gray-600">
+                            {request.recipientDistrict}, {request.recipientUpazila}
+                          </div>
+                          <div className="text-gray-600">
+                            {new Date(request.donationDate).toLocaleDateString()} at {request.donationTime}
+                          </div>
+                        </div>
+
+                        {request.requestMessage && (
+                          <p className="text-gray-700 text-sm line-clamp-2">
+                            {request.requestMessage}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleViewDetails(request._id)}
+                          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                        >
+                          <FaEye /> Details
+                        </button>
+                        {user?.role === 'donor' && request.status === 'pending' && (
+                          <button
+                            onClick={() => handleDonate(request._id)}
+                            className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                          >
+                            <FaHeartbeat /> Donate
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 
             {/* Pagination */}
             {totalPages > 1 && (
-              <div className="mt-6 bg-white px-6 py-4 rounded-xl border border-gray-200">
+              <div className="mt-8 pt-6 border-t border-gray-200">
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-gray-700">
                     Showing <span className="font-medium">{indexOfFirstItem + 1}</span> to{' '}
@@ -476,7 +541,7 @@ const AllDonationRequestsShared = () => {
             )}
           </>
         ) : (
-          <div className="p-12 text-center bg-white rounded-xl border border-gray-200">
+          <div className="text-center py-12 bg-white border border-gray-200 rounded-xl">
             <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <FaTint className="text-2xl text-gray-400" />
             </div>
@@ -484,17 +549,18 @@ const AllDonationRequestsShared = () => {
               No Donation Requests Found
             </h3>
             <p className="text-gray-600 mb-6 max-w-md mx-auto">
-              {searchTerm || statusFilter !== 'all' || bloodGroupFilter !== 'all'
+              {searchTerm || statusFilter !== 'all' || bloodGroupFilter !== 'all' || districtFilter
                 ? 'No requests match your current filters. Try adjusting your search criteria.'
-                : 'No donation requests found in the system.'}
+                : 'No donation requests available at the moment.'}
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              {(searchTerm || statusFilter !== 'all' || bloodGroupFilter !== 'all') && (
+              {(searchTerm || statusFilter !== 'all' || bloodGroupFilter !== 'all' || districtFilter) && (
                 <button
                   onClick={() => {
                     setSearchTerm('');
                     setStatusFilter('all');
                     setBloodGroupFilter('all');
+                    setDistrictFilter('');
                   }}
                   className="bg-gray-600 hover:bg-gray-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
                 >
@@ -503,10 +569,10 @@ const AllDonationRequestsShared = () => {
               )}
               {user?.role === 'donor' && (
                 <button
-                  onClick={() => navigate('/dashboard/create-donation-request')}
+                  onClick={handleCreateRequest}
                   className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-medium transition-colors"
                 >
-                  Create Your First Request
+                  Create New Request
                 </button>
               )}
             </div>
@@ -515,74 +581,104 @@ const AllDonationRequestsShared = () => {
       </motion.div>
 
       {/* Urgent Requests Banner */}
-      {stats.pending > 0 && (
+      {stats.urgent > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
+          transition={{ delay: 0.4 }}
           className="bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl p-6"
         >
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
                 <FaExclamationTriangle className="text-xl" />
               </div>
               <div>
-                <h3 className="text-xl font-bold">{stats.pending} Pending Blood Requests</h3>
-                <p className="text-red-100">
-                  Your donation could save a life today. Check if you can help!
-                </p>
+                <h3 className="text-xl font-bold">{stats.urgent} Urgent Blood Need{stats.urgent !== 1 ? 's' : ''}</h3>
+                <p className="text-red-100">These requests require immediate attention within 24 hours.</p>
               </div>
             </div>
             <button
               onClick={() => {
                 setStatusFilter('pending');
-                setBloodGroupFilter(user?.bloodGroup || 'all');
+                setSearchTerm('');
               }}
-              className="bg-white text-red-600 hover:bg-gray-100 px-6 py-3 rounded-lg font-bold transition-colors whitespace-nowrap"
+              className="bg-white text-red-600 hover:bg-gray-100 px-6 py-3 rounded-lg font-semibold transition-colors"
             >
-              View Matching Requests
+              View Urgent Requests
             </button>
           </div>
         </motion.div>
       )}
 
-      {/* Compatibility Info */}
-      {user?.bloodGroup && (
-        <motion.div
-          initial="hidden"
-          animate="visible"
-          variants={fadeInUp}
-          transition={{ delay: 0.4 }}
-          className="bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-6"
-        >
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Your Blood Group Compatibility</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <div className="text-sm text-gray-600 mb-2">Your Blood Group</div>
-              <div className="text-2xl font-bold text-red-600">{user.bloodGroup}</div>
-              <p className="text-gray-700 text-sm mt-2">
-                You can donate to requests with matching blood groups.
-              </p>
-            </div>
-            <div>
-              <div className="text-sm text-gray-600 mb-2">Matching Requests Available</div>
-              <div className="text-2xl font-bold text-gray-900">
-                {donationRequests.filter(r => r.bloodGroup === user.bloodGroup && r.status === 'pending').length}
+      {/* Information Section */}
+      <motion.div
+        initial="hidden"
+        animate="visible"
+        variants={fadeInUp}
+        transition={{ delay: 0.5 }}
+        className="grid grid-cols-1 md:grid-cols-2 gap-6"
+      >
+        <div className="bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">How to Respond</h3>
+          <ol className="space-y-3 text-gray-700">
+            <li className="flex items-start gap-3">
+              <div className="w-6 h-6 bg-blue-200 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                <span className="text-blue-800 text-sm font-bold">1</span>
               </div>
-              <button
-                onClick={() => {
-                  setStatusFilter('pending');
-                  setBloodGroupFilter(user.bloodGroup);
-                }}
-                className="mt-2 text-blue-600 hover:text-blue-800 font-medium text-sm"
-              >
-                View all matching requests →
-              </button>
-            </div>
-          </div>
-        </motion.div>
-      )}
+              <span>Find a request matching your blood type and location</span>
+            </li>
+            <li className="flex items-start gap-3">
+              <div className="w-6 h-6 bg-blue-200 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                <span className="text-blue-800 text-sm font-bold">2</span>
+              </div>
+              <span>Click "View Details" to see complete information</span>
+            </li>
+            <li className="flex items-start gap-3">
+              <div className="w-6 h-6 bg-blue-200 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                <span className="text-blue-800 text-sm font-bold">3</span>
+              </div>
+              <span>If you can help, click "Donate" to express your interest</span>
+            </li>
+            <li className="flex items-start gap-3">
+              <div className="w-6 h-6 bg-blue-200 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                <span className="text-blue-800 text-sm font-bold">4</span>
+              </div>
+              <span>The requester will contact you to coordinate the donation</span>
+            </li>
+          </ol>
+        </div>
+
+        <div className="bg-gradient-to-r from-green-50 to-green-100 border border-green-200 rounded-xl p-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Eligibility Checklist</h3>
+          <ul className="space-y-3 text-gray-700">
+            <li className="flex items-start gap-3">
+              <div className="w-6 h-6 bg-green-200 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                <FaCheckCircle className="text-green-600 text-sm" />
+              </div>
+              <span>Age between 18-65 years</span>
+            </li>
+            <li className="flex items-start gap-3">
+              <div className="w-6 h-6 bg-green-200 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                <FaCheckCircle className="text-green-600 text-sm" />
+              </div>
+              <span>Weight at least 50 kg</span>
+            </li>
+            <li className="flex items-start gap-3">
+              <div className="w-6 h-6 bg-green-200 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                <FaCheckCircle className="text-green-600 text-sm" />
+              </div>
+              <span>Good health with no recent illnesses</span>
+            </li>
+            <li className="flex items-start gap-3">
+              <div className="w-6 h-6 bg-green-200 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                <FaCheckCircle className="text-green-600 text-sm" />
+              </div>
+              <span>Last donation at least 3 months ago</span>
+            </li>
+          </ul>
+        </div>
+      </motion.div>
     </div>
   );
 };
